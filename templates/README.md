@@ -1,33 +1,109 @@
-# Metadata template
+# Metadata template (guidance)
 
-This folder contains the **official metadata template** used by the Data Entry app.
+The structure of the data entry interface is fully defined by a **metadata template (`.xlsx`)**.
 
-## Purpose
+## Tabs and app behaviour
 
-The structure of the template:
-- defines the input tabs shown in the app
-- determines which fields can be entered
-- is required for correct loading of existing results
+- **Each sheet in the Excel metadata template becomes one tab in the app**
+- Each tab represents a **separate data table**
+- Records entered in different tabs are stored independently
+- When results are downloaded, all tabs are stored together in **one `.rds` file**
+- When a previously saved `.rds` file is uploaded, data is restored **per tab**
 
-Users must always use **this template** (or a compatible version) when:
-- starting a new data entry session
-- resuming work from a previously saved `.rds` file
+In short:
 
-## Structure rules
+> **Excel sheet → App tab → One data frame in the output**
 
-Each sheet in the Excel file:
-- becomes one tab in the application
-- must follow the expected column structure (`id`, `type`, `label`, …)
+## Required columns in the template
 
-The app will:
-- ignore unknown tabs when loading an `.rds`
-- ignore unknown columns
-- add missing columns with `NA`
+Each sheet in the metadata template must contain the following columns:
 
-## Versioning
+| Column     | Required | Description |
+|-----------|----------|-------------|
+| `id`      | ✅ Yes | Internal variable name (used as column name in the data) |
+| `type`    | ✅ Yes | Type of input control to generate |
+| `label`   | ✅ Yes | Label shown to the user in the UI |
+| `default` | Optional | Default value for new entries |
+| `choices` | Conditional | Required for `radioButtons` |
 
-If the template changes:
-- existing `.rds` files may need realignment
-- users should download the updated template from this repository
+## Column details
 
-For transparency and reproducibility, **the template distributed here is the source of truth**.
+### `id`
+
+- Must be **unique within a sheet**
+- Must be a valid R variable name
+- Used as input identifier and column name in the output
+
+Example:
+
+```
+age
+sex
+country
+```
+
+### `type`
+
+Defines which input control is generated. The app currently supports:
+
+- `textInput` — free text input
+- `numericInput` — numeric values
+- `radioButtons` — predefined categorical choices
+
+Any other value is ignored by the app.
+
+### `label`
+
+Text displayed to the user next to the input field.
+
+Use clear, descriptive labels and avoid internal codes.
+
+### `default`
+
+Optional default value when starting a new entry.
+
+- `textInput`: text value
+- `numericInput`: numeric value
+- `radioButtons`: typically left empty
+
+If empty or missing, no default value is applied.
+
+### `choices` (required for `radioButtons`)
+
+Defines selectable options for radio buttons.
+
+**Required when `type = radioButtons`; ignored otherwise.**
+
+Format:
+
+```
+Label1=Value1; Label2=Value2; Label3=Value3
+```
+
+Example:
+
+```
+Male=1; Female=2; Other=3
+```
+
+- Labels are shown to the user
+- Values are stored in the data (numeric or text)
+- An explicit `Missing=None` option is automatically added by the app
+
+## Example (simplified)
+
+```
+id        | type          | label            | default | choices
+--------------------------------------------------------------
+age       | numericInput  | Age              |         |
+sex       | radioButtons  | Sex              |         | Male=1; Female=2
+comments  | textInput     | Additional notes |         |
+```
+
+## Important notes
+
+- id order defines input order in the UI
+- The metadata template defines the **data schema**
+- Incorrect metadata may result in invalid or unusable data
+- Changes may break compatibility with older `.rds` files
+
