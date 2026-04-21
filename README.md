@@ -22,6 +22,17 @@ It supports **saving and resuming work via a single `.rds` file**, making it sui
 
 Downloaded results are stored as:
 
+## Metadata template
+
+The application requires a metadata template to define the structure of the data entry forms.
+
+The **official template** is available here:
+
+➡️ [`templates/metadata_template.xlsx`](templates/metadata_template.xlsx)
+
+Users must not modify the structure of the template unless explicitly instructed.
+
+
 ```r
 list(
   TabName1 = data.frame(...),
