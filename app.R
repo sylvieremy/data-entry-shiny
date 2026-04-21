@@ -180,18 +180,6 @@ ui <- fluidPage(
           )
         ),
         
-        hr(style = "margin:12px 0;"),
-        
-        div(
-          style = "text-align:center;",
-          actionButton(
-            "btn_start",
-            "Load template & start",
-            class = "btn-primary",
-            style = "min-width:220px;"
-          )
-        ),
-        
         br(),
         
         div(
@@ -203,7 +191,21 @@ ui <- fluidPage(
             font-size:90%;
           ",
           verbatimTextOutput("setup_status")
-        )
+        ),
+        
+        hr(style = "margin:12px 0;"),
+        
+        div(
+          style = "text-align:center;",
+          actionButton(
+            "btn_start",
+            "Load template and (when applicable) existing results",
+            class = "btn-primary",
+            style = "min-width:220px;"
+          )
+        ),
+        
+        
       )
     ),
     
@@ -228,7 +230,164 @@ ui <- fluidPage(
 
 # ---- Server ----
 server <- function(input, output, session) {
+  # ---- Helpers: summarize template / results / check match ----
   
+  summarize_template_xlsx <- function(path) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+    
+    sheets <- readxl::excel_sheets(path)
+    per_sheet <- lapply(sheets, function(sh) {
+      df <- readxl::read_excel(path, sheet = sh)
+      
+      # Expect columns: id, type, label, default, choices
+      # Be defensive: allow missing columns without crashing
+      nms <- names(df)
+      ids <- if ("id" %in% nms) as.character(df$id) else character(0)
+      ids <- ids[!is.na(ids) & nzchar(trimws(ids))]
+      
+      types_raw <- if ("type" %in% nms) as.character(df$type) else character(0)
+      types_raw <- trimws(types_raw)
+      types_raw <- types_raw[!is.na(types_raw) & nzchar(types_raw)]
+      
+      type_table <- sort(table(types_raw))
+      
+      
+      # duplicates within sheet
+      dup_ids <- unique(ids[duplicated(ids)])
+      
+      # radioButtons checks
+      rb_rows <- integer(0)
+      rb_missing_choices <- integer(0)
+      if ("type" %in% nms) {
+        rb_rows <- which(trimws(as.character(df$type)) == "radioButtons")
+        if (length(rb_rows) > 0) {
+          if ("choices" %in% nms) {
+            ch <- df$choices[rb_rows]
+            missing <- is.na(ch) | !nzchar(trimws(as.character(ch)))
+            rb_missing_choices <- rb_rows[missing]
+          } else {
+            rb_missing_choices <- rb_rows
+          }
+        }
+      }
+      
+      list(
+        sheet = sh,
+        n_rows = nrow(df),
+        n_ids = length(ids),
+        ids = ids,
+        dup_ids = dup_ids,
+        types = names(type_table),
+        type_counts = as.integer(type_table),
+        type_table = type_table,
+        radio_n = length(rb_rows),
+        radio_missing_choices_n = length(rb_missing_choices)
+      )
+    })
+    names(per_sheet) <- sheets
+    
+    list(
+      sheets = sheets,
+      per_sheet = per_sheet
+    )
+  }
+  
+  summarize_results_rds <- function(path) {
+    if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+    
+    obj <- readRDS(path)
+    if (!is.list(obj)) {
+      return(list(is_list = FALSE, tabs = character(0), per_tab = list()))
+    }
+    
+    tabs <- names(obj)
+    tabs <- tabs[!is.na(tabs) & nzchar(tabs)]
+    
+    per_tab <- lapply(tabs, function(tb) {
+      x <- obj[[tb]]
+      if (is.data.frame(x)) {
+        cols <- names(x)
+        cols <- cols[!is.na(cols) & nzchar(cols)]
+        list(tab = tb, is_df = TRUE, n_rows = nrow(x), cols = cols)
+      } else {
+        list(tab = tb, is_df = FALSE, n_rows = NA_integer_, cols = character(0))
+      }
+    })
+    names(per_tab) <- tabs
+    
+    list(
+      is_list = TRUE,
+      tabs = tabs,
+      per_tab = per_tab
+    )
+  }
+  
+  compare_template_results <- function(template_info, results_info) {
+    # Return NULL if insufficient info
+    if (is.null(template_info)) return(NULL)
+    if (is.null(results_info) || !isTRUE(results_info$is_list)) {
+      return(list(
+        ok = TRUE,
+        notes = c("No results file provided (starting from empty results)."),
+        missing_tabs = character(0),
+        extra_tabs = character(0),
+        per_tab = list()
+      ))
+    }
+    
+    tmpl_tabs <- template_info$sheets
+    res_tabs  <- results_info$tabs
+    
+    missing_tabs <- setdiff(tmpl_tabs, res_tabs)
+    extra_tabs   <- setdiff(res_tabs, tmpl_tabs)
+    
+    per_tab <- list()
+    for (tb in intersect(tmpl_tabs, res_tabs)) {
+      # template expected ids
+      exp_ids <- template_info$per_sheet[[tb]]$ids
+      # results columns (only if df)
+      rt <- results_info$per_tab[[tb]]
+      if (!isTRUE(rt$is_df)) {
+        per_tab[[tb]] <- list(
+          tab = tb,
+          ok = FALSE,
+          note = "Tab exists in results but is not a data.frame.",
+          missing_cols = exp_ids,
+          extra_cols = character(0)
+        )
+      } else {
+        have <- rt$cols
+        missing_cols <- setdiff(exp_ids, have)
+        extra_cols <- setdiff(have, exp_ids)
+        per_tab[[tb]] <- list(
+          tab = tb,
+          ok = (length(missing_cols) == 0),
+          note = NULL,
+          missing_cols = missing_cols,
+          extra_cols = extra_cols
+        )
+      }
+    }
+    
+    ok_overall <- (length(missing_tabs) == 0) &&
+      all(vapply(per_tab, function(x) isTRUE(x$ok), logical(1)))
+    
+    notes <- character(0)
+    if (length(missing_tabs) > 0) notes <- c(notes, paste0("Missing tabs in results: ", paste(missing_tabs, collapse = ", ")))
+    if (length(extra_tabs) > 0)   notes <- c(notes, paste0("Extra tabs in results (ignored on load): ", paste(extra_tabs, collapse = ", ")))
+    if (length(notes) == 0) notes <- c("Template and results structure match (for shared tabs).")
+    
+    list(
+      ok = ok_overall,
+      notes = notes,
+      missing_tabs = missing_tabs,
+      extra_tabs = extra_tabs,
+      per_tab = per_tab
+    )
+  }
+  
+        
+        
   rv <- reactiveValues(
     template_path = NULL,
     panel_metadata = NULL,
@@ -241,6 +400,41 @@ server <- function(input, output, session) {
   
   # Store per-panel data as reactiveValues (one data.frame per panel)
   rv_data <- reactiveValues()
+  
+  # Cache structure summaries so we don't re-read files on every re-render
+  template_info <- reactiveVal(NULL)
+  results_info  <- reactiveVal(NULL)
+  match_info    <- reactiveVal(NULL)
+  
+  observeEvent(input$template_file$datapath, {
+    if (is.null(input$template_file$datapath)) {
+      template_info(NULL)
+      match_info(NULL)
+      return()
+    }
+    ti <- summarize_template_xlsx(input$template_file$datapath)
+    template_info(ti)
+    
+    # update match if results already present
+    mi <- compare_template_results(ti, results_info())
+    match_info(mi)
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$existing_results_rds$datapath, {
+    if (is.null(input$existing_results_rds$datapath)) {
+      results_info(NULL)
+      # match with "no results"
+      mi <- compare_template_results(template_info(), NULL)
+      match_info(mi)
+      return()
+    }
+    ri <- summarize_results_rds(input$existing_results_rds$datapath)
+    results_info(ri)
+    
+    mi <- compare_template_results(template_info(), ri)
+    match_info(mi)
+  }, ignoreInit = TRUE)
+  
   
   # Helper to build the "results list" from current reactiveValues
   current_results_list <- reactive({
@@ -259,7 +453,7 @@ server <- function(input, output, session) {
     rds  <- if (!is.null(input$existing_results_rds$name)) input$existing_results_rds$name else "(no existing results)"
     started <- if (isTRUE(rv$ready)) "YES" else "NO"
     
-    # counts per tab (only after ready)
+    # existing counts per tab (only after ready)
     counts_txt <- ""
     if (isTRUE(rv$ready) && !is.null(rv$panel_metadata)) {
       pnms <- names(rv$panel_metadata)
@@ -269,7 +463,6 @@ server <- function(input, output, session) {
       }, integer(1))
       
       total <- sum(counts)
-      # nice formatting
       lines <- paste0(" - ", pnms, ": ", counts)
       counts_txt <- paste0(
         "\n\nRecords loaded/entered per tab:\n",
@@ -278,13 +471,107 @@ server <- function(input, output, session) {
       )
     }
     
+    # ---- NEW: template structure ----
+    ti <- template_info()
+    template_txt <- ""
+    if (!is.null(ti)) {
+      sheet_lines <- vapply(ti$per_sheet, function(s) {
+        
+        # type counts: textInput: 2 | numericInput: 1 | radioButtons: 1
+        type_part <- if (!is.null(s$type_table) && length(s$type_table) > 0) {
+          paste(
+            paste0(names(s$type_table), ": ", as.integer(s$type_table)),
+            collapse = " | "
+          )
+        } else {
+          "no types found"
+        }
+        
+        dup_part <- if (length(s$dup_ids) > 0)
+          paste0(" | DUP ids: ", paste(s$dup_ids, collapse = ", "))
+        else ""
+        
+        rb_part <- if (s$radio_n > 0)
+          paste0(" | radioButtons: ", s$radio_n,
+                 " (missing choices: ", s$radio_missing_choices_n, ")")
+        else ""
+        
+        paste0(
+          " - ", s$sheet, ": ",
+          s$n_ids, " ids | ",
+          type_part,
+          dup_part,
+          rb_part
+        )
+      }, character(1))
+      
+      
+      template_txt <- paste0(
+        "\n\nTemplate structure:\n",
+        "Tabs (sheets): ", paste(ti$sheets, collapse = ", "),
+        "\nIDs per tab:\n", paste(sheet_lines, collapse = "\n")
+      )
+    }
+    
+    # ---- NEW: results structure ----
+    ri <- results_info()
+    results_txt <- ""
+    if (!is.null(ri)) {
+      if (!isTRUE(ri$is_list)) {
+        results_txt <- "\n\nResults structure:\n - Uploaded .rds is not a list (expected a list of data.frames)."
+      } else {
+        tab_lines <- vapply(ri$per_tab, function(t) {
+          if (!isTRUE(t$is_df)) {
+            paste0(" - ", t$tab, ": NOT a data.frame")
+          } else {
+            paste0(" - ", t$tab, ": ", length(t$cols), " columns (", t$n_rows, " rows)")
+          }
+        }, character(1))
+        
+        results_txt <- paste0(
+          "\n\nResults structure:\n",
+          "Tabs: ", paste(ri$tabs, collapse = ", "),
+          "\nColumns per tab:\n", paste(tab_lines, collapse = "\n")
+        )
+      }
+    }
+    
+    # ---- NEW: match check ----
+    mi <- match_info()
+    match_txt <- ""
+    if (!is.null(mi) && !isTRUE(rv$ready)) {
+      status <- if (isTRUE(mi$ok)) "OK" else "CHECK NEEDED"
+      match_txt <- paste0(
+        "\n\nTemplate ↔ Results check: ", status,
+        "\n", paste0(" - ", mi$notes, collapse = "\n")
+      )
+      
+      # If there are column mismatches, list only the first few for readability
+      if (!isTRUE(mi$ok) && length(mi$per_tab) > 0) {
+        problems <- vapply(mi$per_tab, function(x) {
+          if (isTRUE(x$ok)) return(NA_character_)
+          miss <- if (length(x$missing_cols) > 0) paste0("missing: ", paste(head(x$missing_cols, 10), collapse = ", ")) else NULL
+          extra <- if (length(x$extra_cols) > 0) paste0("extra: ", paste(head(x$extra_cols, 10), collapse = ", ")) else NULL
+          paste0("   * ", x$tab, " → ", paste(c(miss, extra), collapse = " | "))
+        }, character(1))
+        problems <- problems[!is.na(problems)]
+        if (length(problems) > 0) {
+          match_txt <- paste0(match_txt, "\nColumn mismatches:\n", paste(problems, collapse = "\n"))
+        }
+      }
+    }
+    
     paste0(
       "Template: ", tmpl,
       "\nExisting results: ", rds,
       "\nStarted: ", started,
-      counts_txt
+      counts_txt,
+      template_txt,
+      results_txt,
+      match_txt
     )
   })
+  
   
   
   # Start: build panel_metadata + initialize data (empty or from uploaded rds)
@@ -318,6 +605,16 @@ server <- function(input, output, session) {
         }
       }
     }
+    
+    # --- OPTIONAL: warn if template/results structure mismatch (does not block) ---
+    mi <- compare_template_results(template_info(), results_info())
+    if (!is.null(mi) && !isTRUE(mi$ok)) {
+      showNotification(
+        "Template/results structure mismatch detected. See Setup status for details.",
+        type = "warning"
+      )
+    }
+    
     
     if (!is.null(input$existing_results_rds$datapath)) {
       loaded <- readRDS(input$existing_results_rds$datapath)
