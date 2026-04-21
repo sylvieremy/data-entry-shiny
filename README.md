@@ -2,7 +2,7 @@
 
 ## 🔗 Online application
 The application is available here:  
-👉 **https://sylvieremy.github.io/data-entry-shiny/**
+👉 **https://vito-epi.github.io/data-entry-shiny/**
 
 No installation or login is required — the app runs entirely in your web browser.
 
