@@ -131,87 +131,98 @@ ui <- fluidPage(
   
   div(
     class = "container-fluid",
-    div(
-      style = "
-        padding:16px;
-        border:1px solid #ddd;
-        border-radius:12px;
-        margin-bottom:20px;
-        background-color:#fafafa;
-      ",
-      h4("Setup", style = "margin-top:0;"),
-      
-      fluidRow(
-        column(
-          width = 6,
-          tags$strong("1. Metadata template"),
-          fileInput(
-            "template_file",
-            label = NULL,
-            accept = c(".xlsx"),
-            buttonLabel = "Browse…",
-            placeholder = "Select metadata template (.xlsx)"
-          ),
-          tags$small(class = "text-muted",
-                     "This template defines the structure of the data entry forms.")
-        ),
-        
-        column(
-          width = 6,
-          tags$strong("2. Start from existing results (.rds) (optional)"),
-          fileInput(
-            "existing_results_rds",
-            label = NULL,
-            accept = c(".rds"),
-            buttonLabel = "Browse…",
-            placeholder = "Optional: upload previous results (.rds)"
-          ),
-          tags$small(
-            class = "text-muted",
-            "Upload a previously downloaded results .rds to continue data entry."
-          )
-        )
-      ),
-      
-      hr(style = "margin:12px 0;"),
-      
-      div(
-        style = "text-align:center;",
-        actionButton(
-          "btn_start",
-          "Load template & start",
-          class = "btn-primary",
-          style = "min-width:220px;"
-        ),
-        
-        # Download button only appears after Start
-        conditionalPanel(
-          condition = "output.ready === true",
-          tags$span(" "),
-          downloadButton(
-            "download_results_rds",
-            "Download results (.rds)",
-            class = "btn-success",
-            style = "min-width:220px;"
-          )
-        )
-      ) ,
-      
-      br(),
+    
+    # ---- SETUP (only visible BEFORE start) ----
+    conditionalPanel(
+      condition = "output.ready !== true",
       
       div(
         style = "
-          background-color:#f5f7fa;
-          border:1px solid #e1e4e8;
-          border-radius:6px;
-          padding:8px 12px;
-          font-size:90%;
+          padding:16px;
+          border:1px solid #ddd;
+          border-radius:12px;
+          margin-bottom:20px;
+          background-color:#fafafa;
         ",
-        verbatimTextOutput("setup_status")
+        h4("Setup", style = "margin-top:0;"),
+        
+        fluidRow(
+          column(
+            width = 6,
+            tags$strong("1. Metadata template"),
+            fileInput(
+              "template_file",
+              label = NULL,
+              accept = c(".xlsx"),
+              buttonLabel = "Browse…",
+              placeholder = "Select metadata template (.xlsx)"
+            ),
+            tags$small(
+              class = "text-muted",
+              "This template defines the structure of the data entry forms."
+            )
+          ),
+          
+          column(
+            width = 6,
+            tags$strong("2. Start from existing results (.rds) (optional)"),
+            fileInput(
+              "existing_results_rds",
+              label = NULL,
+              accept = c(".rds"),
+              buttonLabel = "Browse…",
+              placeholder = "Optional: upload previous results (.rds)"
+            ),
+            tags$small(
+              class = "text-muted",
+              "Upload a previously downloaded results .rds to continue data entry."
+            )
+          )
+        ),
+        
+        hr(style = "margin:12px 0;"),
+        
+        div(
+          style = "text-align:center;",
+          actionButton(
+            "btn_start",
+            "Load template & start",
+            class = "btn-primary",
+            style = "min-width:220px;"
+          )
+        ),
+        
+        br(),
+        
+        div(
+          style = "
+            background-color:#f5f7fa;
+            border:1px solid #e1e4e8;
+            border-radius:6px;
+            padding:8px 12px;
+            font-size:90%;
+          ",
+          verbatimTextOutput("setup_status")
+        )
+      )
+    ),
+    
+    # ---- AFTER START: download button ----
+    conditionalPanel(
+      condition = "output.ready === true",
+      div(
+        style = "margin-bottom:20px;",
+        downloadButton(
+          "download_results_rds",
+          "Download results (.rds)",
+          class = "btn-success",
+          style = "min-width:220px;"
+        )
       )
     )
   ),
   
+  # ---- MAIN DATA ENTRY UI ----
   uiOutput("main_ui")
 )
 
@@ -280,6 +291,8 @@ server <- function(input, output, session) {
   observeEvent(input$btn_start, {
     req(input$template_file$datapath)
     
+    loaded <- NULL   # ✅ IMPORTANT FIX
+    
     pm <- build_panel_metadata_from_xlsx(input$template_file$datapath)
     
     rv$template_path <- input$template_file$datapath
@@ -315,13 +328,19 @@ server <- function(input, output, session) {
       )
     }
     
-    extra_tabs <- setdiff(names(loaded), names(pm))
-    if (length(extra_tabs) > 0) {
-      showNotification(
-        paste0("Note: ignored extra tabs in uploaded .rds: ", paste(extra_tabs, collapse = ", ")),
-        type = "warning"
-      )
+    if (!is.null(loaded)) {
+      extra_tabs <- setdiff(names(loaded), names(pm))
+      if (length(extra_tabs) > 0) {
+        showNotification(
+          paste0(
+            "Note: ignored extra tabs in uploaded .rds: ",
+            paste(extra_tabs, collapse = ", ")
+          ),
+          type = "warning"
+        )
+      }
     }
+    
     
     
     
